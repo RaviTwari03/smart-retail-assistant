@@ -1,0 +1,42 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+
+# Environment
+.env
+
+# macOS
+.DS_Store
+
+# Docker
+*.log
+
+# VSCode
+.vscode/
+
+# Build
+build/
+dist/
+
+# Cache
+.cache/
+
+# Pytest
+.pytest_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Coverage
+htmlcov/
+.coverage
+
+# React
+frontend/node_modules/
+
+# Python virtual envs
+backend/venv/
