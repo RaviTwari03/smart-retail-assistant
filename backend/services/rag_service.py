@@ -6,45 +6,79 @@ from langchain_community.document_loaders import (
 )
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+
 from langchain_community.vectorstores import Chroma
+
 from langchain_huggingface import HuggingFaceEmbeddings
 
-DB_PATH = "vector_db"
+
+# =========================
+# CONFIG
+# =========================
+
+DB_PATH = "./vector_db"
+
+KB_PATH = "./knowledge_base"
+
+
+# =========================
+# EMBEDDING MODEL
+# =========================
 
 embedding_model = HuggingFaceEmbeddings(
     model_name="sentence-transformers/all-MiniLM-L6-v2"
 )
 
+
+# =========================
+# CREATE VECTOR DATABASE
+# =========================
+
 def create_vector_db():
 
     documents = []
 
-    kb_path = "knowledge_base"
+    # Check knowledge base exists
+    if not os.path.exists(KB_PATH):
 
-    for file in os.listdir(kb_path):
+        print(f"Knowledge base folder not found: {KB_PATH}")
+        return
 
-        file_path = f"{kb_path}/{file}"
+    # Load all files
+    for file in os.listdir(KB_PATH):
 
-        # TXT FILES
-        if file.endswith(".txt"):
+        file_path = os.path.join(KB_PATH, file)
 
-            print(f"Loading TXT file: {file}")
+        try:
 
-            loader = TextLoader(file_path)
+            # TXT FILES
+            if file.endswith(".txt"):
 
-            documents.extend(loader.load())
+                print(f"Loading TXT file: {file}")
 
-        # PDF FILES
-        elif file.endswith(".pdf"):
+                loader = TextLoader(
+                    file_path,
+                    encoding="utf-8"
+                )
 
-            print(f"Loading PDF file: {file}")
+                documents.extend(loader.load())
 
-            loader = PyPDFLoader(file_path)
+            # PDF FILES
+            elif file.endswith(".pdf"):
 
-            documents.extend(loader.load())
+                print(f"Loading PDF file: {file}")
+
+                loader = PyPDFLoader(file_path)
+
+                documents.extend(loader.load())
+
+        except Exception as e:
+
+            print(f"Error loading {file}: {e}")
 
     print(f"Total documents loaded: {len(documents)}")
 
+    # Split documents
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=300,
         chunk_overlap=50
@@ -54,24 +88,46 @@ def create_vector_db():
 
     print(f"Total chunks created: {len(docs)}")
 
+    # Delete old DB if exists
+    if os.path.exists(DB_PATH):
+
+        print("Removing old vector DB...")
+
+    # Create vector DB
     vector_db = Chroma.from_documents(
-        docs,
-        embedding_model,
+        documents=docs,
+        embedding=embedding_model,
         persist_directory=DB_PATH
     )
-
-    vector_db.persist()
 
     print("Vector DB created successfully")
 
 
+# =========================
+# SEARCH DOCUMENTS
+# =========================
+
 def search_documents(query):
 
-    vector_db = Chroma(
-        persist_directory=DB_PATH,
-        embedding_function=embedding_model
-    )
+    try:
 
-    results = vector_db.similarity_search(query, k=3)
+        vector_db = Chroma(
+            persist_directory=DB_PATH,
+            embedding_function=embedding_model
+        )
 
-    return [doc.page_content for doc in results]
+        results = vector_db.similarity_search(
+            query,
+            k=3
+        )
+
+        return [
+            doc.page_content
+            for doc in results
+        ]
+
+    except Exception as e:
+
+        print(f"Search Error: {e}")
+
+        return []

@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-
+from database import engine, Base
 from pydantic import BaseModel
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,6 +21,7 @@ from services.db_service import (
 # =========================
 # FastAPI Initialization
 # =========================
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title="Smart Retail Assistant",
