@@ -1,15 +1,21 @@
+import os
+
+from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
-# DATABASE_URL = (
-#     # "postgresql://postgres:postgres@postgres:5432/smart_retail_db"
-# #    "postgresql://postgres:password@localhost:5432/retail_db"
-# "postgresql://ravitiwari@localhost:5432/retail_db"
-# )
-DATABASE_URL = "postgresql://postgres:postgres@postgres:5432/smart_retail_db"
+load_dotenv()
 
-engine = create_engine(DATABASE_URL)
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL environment variable is missing")
+
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True
+)
 
 SessionLocal = sessionmaker(
     autocommit=False,

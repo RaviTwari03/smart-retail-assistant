@@ -1,7 +1,6 @@
-#!/bin/bash
+#!/bin/sh
 
-gunicorn \
-  --worker-class uvicorn.workers.UvicornWorker \
-  --workers 4 \
-  --bind 0.0.0.0:8000 \
-  main:app
+gunicorn -w 2 \
+  -k uvicorn.workers.UvicornWorker \
+  main:app \
+  --bind 0.0.0.0:8000

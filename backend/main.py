@@ -1,16 +1,16 @@
+import os
+import uvicorn
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from database import engine, Base
-from pydantic import BaseModel
-
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 # =========================
 # Database Imports
 # =========================
 
-from database import SessionLocal
-
+from database import engine, Base, SessionLocal
 from db_models import ChatHistory
 
 from services.db_service import (
@@ -21,6 +21,7 @@ from services.db_service import (
 # =========================
 # FastAPI Initialization
 # =========================
+
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
@@ -46,20 +47,17 @@ app.add_middleware(
 # =========================
 
 class SalesData(BaseModel):
-
     sales: list[float]
 
 
 class QueryRequest(BaseModel):
-
     query: str
 
 
 class OrchestratorRequest(BaseModel):
-
     query: str
-
     stock: int
+
 
 # =========================
 # Root Endpoint
@@ -72,6 +70,7 @@ def home():
         "message": "Smart Retail Assistant API Running Successfully"
     }
 
+
 # =========================
 # Health Check Endpoint
 # =========================
@@ -82,6 +81,7 @@ def health_check():
     return {
         "status": "healthy"
     }
+
 
 # =========================
 # Dashboard Metrics API
@@ -96,6 +96,7 @@ def dashboard_metrics():
         "sales_trend": "Upward"
     }
 
+
 # =========================
 # Forecast API
 # =========================
@@ -103,25 +104,27 @@ def dashboard_metrics():
 @app.get("/forecast")
 def forecast_sales():
 
-    from services.forecast_service import (
-        predict_future_sales
-    )
+    try:
+        from services.forecast_service import predict_future_sales
 
-    predictions = predict_future_sales()
+        predictions = predict_future_sales()
 
-    latest_prediction = predictions[-1]["yhat"]
+        latest_prediction = predictions[-1]["yhat"]
 
-    trend = "Upward"
+        trend = "Upward"
 
-    # save_forecast(
-    #     predicted_sales=latest_prediction,
-    #     sales_trend=trend
-    # )
+        return {
+            "status": "success",
+            "forecast": predictions
+        }
 
-    return {
-        "status": "success",
-        "forecast": predictions
-    }
+    except Exception as e:
+
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
 
 # =========================
 # Anomaly Detection API
@@ -130,16 +133,23 @@ def forecast_sales():
 @app.post("/detect-anomaly")
 def anomaly_detection(data: SalesData):
 
-    from services.anomaly_service import (
-        detect_anomalies
-    )
+    try:
+        from services.anomaly_service import detect_anomalies
 
-    results = detect_anomalies(data.sales)
+        results = detect_anomalies(data.sales)
 
-    return {
-        "status": "success",
-        "results": results
-    }
+        return {
+            "status": "success",
+            "results": results
+        }
+
+    except Exception as e:
+
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
 
 # =========================
 # RAG Document Search API
@@ -148,17 +158,24 @@ def anomaly_detection(data: SalesData):
 @app.post("/search-documents")
 def search_docs(data: QueryRequest):
 
-    from services.rag_service import (
-        search_documents
-    )
+    try:
+        from services.rag_service import search_documents
 
-    results = search_documents(data.query)
+        results = search_documents(data.query)
 
-    return {
-        "status": "success",
-        "query": data.query,
-        "results": results
-    }
+        return {
+            "status": "success",
+            "query": data.query,
+            "results": results
+        }
+
+    except Exception as e:
+
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
 
 # =========================
 # Customer Support Agent API
@@ -167,23 +184,32 @@ def search_docs(data: QueryRequest):
 @app.post("/customer-support")
 def customer_support(data: QueryRequest):
 
-    from agents.customer_support.support_agent import (
-        customer_support_agent
-    )
+    try:
+        from agents.customer_support.support_agent import (
+            customer_support_agent
+        )
 
-    response = customer_support_agent(
-        data.query
-    )
+        response = customer_support_agent(
+            data.query
+        )
 
-    save_chat(
-        query=data.query,
-        response=response
-    )
+        save_chat(
+            query=data.query,
+            response=response
+        )
 
-    return {
-        "status": "success",
-        "response": response
-    }
+        return {
+            "status": "success",
+            "response": response
+        }
+
+    except Exception as e:
+
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
 
 # =========================
 # Multi-Agent Retail Assistant API
@@ -192,19 +218,26 @@ def customer_support(data: QueryRequest):
 @app.post("/retail-assistant")
 def retail_assistant(data: OrchestratorRequest):
 
-    from agents.orchestrator import (
-        orchestrator
-    )
+    try:
+        from agents.orchestrator import orchestrator
 
-    result = orchestrator(
-        query=data.query,
-        stock=data.stock
-    )
+        result = orchestrator(
+            query=data.query,
+            stock=data.stock
+        )
 
-    return {
-        "status": "success",
-        "data": result
-    }
+        return {
+            "status": "success",
+            "data": result
+        }
+
+    except Exception as e:
+
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
 
 # =========================
 # Chat History API
@@ -213,89 +246,81 @@ def retail_assistant(data: OrchestratorRequest):
 @app.get("/chat-history")
 def get_chat_history():
 
-    db = SessionLocal()
+    try:
 
-    chats = db.query(
-        ChatHistory
-    ).all()
+        db = SessionLocal()
 
-    result = []
+        chats = db.query(ChatHistory).all()
 
-    for chat in chats:
+        result = []
 
-        result.append({
+        for chat in chats:
 
-            "id": chat.id,
+            result.append({
+                "id": chat.id,
+                "query": chat.query,
+                "response": chat.response
+            })
 
-            "query": chat.query,
+        db.close()
 
-            "response": chat.response
-        })
+        return {
+            "status": "success",
+            "history": result
+        }
 
-    db.close()
+    except Exception as e:
 
-    return {
-        "status": "success",
-        "history": result
-    }
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
 
 # =========================
 # Azure Bot Endpoint
 # =========================
-
-# =========================
-# Azure Bot Endpoint
-# =========================
-
-# @app.post("/api/messages")
-# async def bot_messages(request: Request):
-
-#     try:
-
-#         body = await request.json()
-
-#         print("===================================")
-#         print("Incoming Azure Bot Message:")
-#         print(body)
-#         print("===================================")
-
-#         user_message = body.get("text", "Hello")
-
-#         response_body = {
-#             "type": "message",
-#             "text": f"You said: {user_message}"
-#         }
-
-#         return JSONResponse(
-#             content=response_body,
-#             status_code=200
-#         )
-
-#     except Exception as e:
-
-#         print("ERROR:", str(e))
-
-#         return JSONResponse(
-#             content={
-#                 "type": "message",
-#                 "text": "Bot Error Occurred"
-#             },
-#             status_code=200
-#         )
 
 @app.post("/api/messages")
 async def bot_messages(request: Request):
 
-    body = await request.json()
+    try:
 
-    print("===================================")
-    print("Incoming Azure Bot Message:")
-    print(body)
-    print("===================================")
+        body = await request.json()
 
-    user_message = body.get("text", "")
+        print("===================================")
+        print("Incoming Azure Bot Message:")
+        print(body)
+        print("===================================")
 
-    return {
-        "type": "message",
-        "text": f"Hello Ravi 👋 You said: {user_message}"
-    }
+        user_message = body.get("text", "")
+
+        return {
+            "type": "message",
+            "text": f"Hello Ravi 👋 You said: {user_message}"
+        }
+
+    except Exception as e:
+
+        return JSONResponse(
+            content={
+                "status": "error",
+                "message": str(e)
+            },
+            status_code=500
+        )
+
+
+# =========================
+# Startup Entry Point
+# =========================
+
+if __name__ == "__main__":
+
+    port = int(os.environ.get("PORT", 8000))
+
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=port
+    )
