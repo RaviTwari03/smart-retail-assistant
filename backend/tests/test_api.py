@@ -164,7 +164,7 @@ class TestAnomalyEndpoint:
 class TestSearchDocumentsEndpoint:
 
     def test_search_returns_200(self, client):
-        with patch("services.rag_service.os.path.exists", return_value=True), \
+        with patch("services.rag_service.vector_db_exists", return_value=True), \
              patch("services.rag_service.Chroma") as mock_chroma:
 
             mock_chroma.return_value.similarity_search.return_value = [
@@ -176,7 +176,7 @@ class TestSearchDocumentsEndpoint:
         assert response.status_code == 200
 
     def test_search_response_has_status_success(self, client):
-        with patch("services.rag_service.os.path.exists", return_value=True), \
+        with patch("services.rag_service.vector_db_exists", return_value=True), \
              patch("services.rag_service.Chroma") as mock_chroma:
 
             mock_chroma.return_value.similarity_search.return_value = [
@@ -197,13 +197,14 @@ class TestSearchDocumentsEndpoint:
         assert response.status_code == 422
 
     def test_search_returns_error_when_db_missing(self, client):
-        with patch("services.rag_service.os.path.exists", return_value=False):
-            data = client.post(
+        with patch("services.rag_service.vector_db_exists", return_value=False):
+            response = client.post(
                 "/search-documents",
                 json={"query": "anything"}
-            ).json()
-
-        assert data["status"] == "error"
+            )
+        # Returns 503 Service Unavailable when vector DB is not ready
+        assert response.status_code == 503
+        assert response.json()["status"] == "error"
 
 
 # ---------------------------------------------------------------------------

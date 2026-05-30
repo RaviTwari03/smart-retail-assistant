@@ -4,13 +4,21 @@ RAG Service
 Retrieval-Augmented Generation pipeline for the Smart Retail Assistant.
 
 Architecture:
-    Azure Blob Storage
-        ↓ Download PDFs
-        ↓ Extract text
-        ↓ Generate embeddings (sentence-transformers/all-MiniLM-L6-v2)
-        ↓ Store in ChromaDB
-        ↓ Similarity search
-        ↓ Return results to FastAPI
+    Azure Blob Storage (single source of truth)
+        ↓  list_documents()
+        ↓  download_document() → secure temp directory
+        ↓  PyPDFLoader / TextLoader
+        ↓  RecursiveCharacterTextSplitter (chunk=300, overlap=50)
+        ↓  HuggingFaceEmbeddings (all-MiniLM-L6-v2)
+        ↓  ChromaDB (persisted at ./vector_db)
+        ↓  similarity_search(k=3)
+        ↓  FastAPI response
+
+Design principles:
+    - One corrupt blob never stops the whole pipeline
+    - Temp files are always cleaned up (finally block)
+    - search_documents() never crashes the API
+    - Structured logging at every stage
 """
 
 import logging
@@ -24,175 +32,270 @@ from langchain_community.vectorstores import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-# =========================
-# LOGGING
-# =========================
-
 logger = logging.getLogger(__name__)
 
-
-# =========================
-# CONFIG
-# =========================
+# ─────────────────────────────────────────────────────────────
+# Configuration
+# ─────────────────────────────────────────────────────────────
 
 DB_PATH = "./vector_db"
 
+CHUNK_SIZE    = 300
+CHUNK_OVERLAP = 50
+SEARCH_K      = 3
+EMBED_MODEL   = "sentence-transformers/all-MiniLM-L6-v2"
 
-# =========================
-# EMBEDDING MODEL
-# =========================
+# ─────────────────────────────────────────────────────────────
+# Embedding model (module-level singleton)
+# ─────────────────────────────────────────────────────────────
 
-embedding_model = HuggingFaceEmbeddings(
-    model_name="sentence-transformers/all-MiniLM-L6-v2"
-)
+logger.info(f"Loading embedding model: {EMBED_MODEL}")
+
+embedding_model = HuggingFaceEmbeddings(model_name=EMBED_MODEL)
+
+logger.info("Embedding model loaded successfully")
 
 
-# =========================
-# CREATE VECTOR DATABASE
-# =========================
+# ─────────────────────────────────────────────────────────────
+# Vector DB status helpers
+# ─────────────────────────────────────────────────────────────
 
-def create_vector_db() -> None:
+def vector_db_exists() -> bool:
+    """Return True if the ChromaDB directory exists and is non-empty."""
+    return os.path.isdir(DB_PATH) and bool(os.listdir(DB_PATH))
+
+
+# ─────────────────────────────────────────────────────────────
+# Create / rebuild vector database
+# ─────────────────────────────────────────────────────────────
+
+def create_vector_db() -> dict:
     """
-    Build the ChromaDB vector database from documents stored in Azure Blob Storage.
+    Build (or rebuild) the ChromaDB vector database from Azure Blob Storage.
 
     Workflow:
-        1. List all blobs in the Azure Blob Storage container
-        2. Download each blob to a secure temporary directory
-        3. Extract text from PDF and TXT files
-        4. Split documents into chunks (size=300, overlap=50)
-        5. Generate embeddings using sentence-transformers
-        6. Persist embeddings in ChromaDB
-        7. Clean up all temporary files
+        1. List all blobs in the Azure container
+        2. Download each blob to a secure temp directory
+        3. Load PDFs with PyPDFLoader, TXT files with TextLoader
+        4. Skip (log + continue) any blob that fails to download or parse
+        5. Split all loaded documents into chunks
+        6. Generate embeddings and persist to ChromaDB
+        7. Delete the temp directory (always, even on failure)
 
-    Raises:
-        AzureStorageError: If blob listing or download fails critically.
+    Returns:
+        dict: {
+            "status": "success" | "partial" | "error",
+            "blobs_found": int,
+            "blobs_loaded": int,
+            "chunks_created": int,
+            "message": str
+        }
     """
-    from services.blob_service import AzureStorageError, list_documents, download_document
+    from services.blob_service import (
+        AzureStorageError,
+        AzureConfigError,
+        list_documents,
+        download_document,
+    )
 
-    logger.info("Starting vector database creation from Azure Blobs")
+    logger.info("=" * 60)
+    logger.info("Starting vector database creation from Azure Blob Storage")
+    logger.info("=" * 60)
 
-    # List all blobs
+    # ── Step 1: list blobs ────────────────────────────────────
     try:
         blob_names = list_documents()
-    except AzureStorageError as e:
-        logger.error(f"Failed to list blobs from Azure Blob Storage: {str(e)}")
-        raise
+    except (AzureStorageError, AzureConfigError) as exc:
+        logger.error(f"Cannot list blobs — aborting vector DB creation: {exc}")
+        return {
+            "status": "error",
+            "blobs_found": 0,
+            "blobs_loaded": 0,
+            "chunks_created": 0,
+            "message": str(exc),
+        }
 
     if not blob_names:
-        logger.warning("No blobs found in Azure Blob Storage container. Vector DB not created.")
-        return
+        logger.warning("No blobs found in Azure Blob Storage — vector DB not created")
+        return {
+            "status": "error",
+            "blobs_found": 0,
+            "blobs_loaded": 0,
+            "chunks_created": 0,
+            "message": "No documents found in Azure Blob Storage container",
+        }
 
-    logger.info(f"Retrieved {len(blob_names)} blobs from container")
+    logger.info(f"Found {len(blob_names)} blob(s): {blob_names}")
 
-    documents = []
-    temp_dir = tempfile.mkdtemp(prefix="rag_kb_")
+    # ── Step 2: download & parse ──────────────────────────────
+    documents   = []
+    failed      = []
+    temp_dir    = tempfile.mkdtemp(prefix="rag_kb_")
 
-    logger.info(f"Created temporary directory: {temp_dir}")
+    logger.info(f"Temp directory: {temp_dir}")
 
     try:
         for blob_name in blob_names:
             local_path = os.path.join(temp_dir, blob_name)
 
-            # Download blob
+            # Download
             try:
                 download_document(blob_name, local_path)
-            except Exception as e:
-                logger.error(f"Failed to download blob '{blob_name}': {str(e)}")
+            except Exception as exc:
+                logger.error(
+                    f"[SKIP] Download failed for '{blob_name}': {exc}"
+                )
+                failed.append(blob_name)
                 continue
 
-            # Extract text based on file type
+            # Parse
             try:
-                if blob_name.lower().endswith(".pdf"):
-                    logger.info(f"Loading PDF: {blob_name}")
-                    loader = PyPDFLoader(local_path)
-                    documents.extend(loader.load())
+                ext = blob_name.lower().rsplit(".", 1)[-1] if "." in blob_name else ""
 
-                elif blob_name.lower().endswith(".txt"):
-                    logger.info(f"Loading TXT: {blob_name}")
-                    loader = TextLoader(local_path, encoding="utf-8")
-                    documents.extend(loader.load())
+                if ext == "pdf":
+                    logger.info(f"Parsing PDF: '{blob_name}'")
+                    docs = PyPDFLoader(local_path).load()
+                    documents.extend(docs)
+                    logger.info(
+                        f"  → {len(docs)} page(s) loaded from '{blob_name}'"
+                    )
+
+                elif ext == "txt":
+                    logger.info(f"Parsing TXT: '{blob_name}'")
+                    docs = TextLoader(local_path, encoding="utf-8").load()
+                    documents.extend(docs)
+                    logger.info(
+                        f"  → {len(docs)} document(s) loaded from '{blob_name}'"
+                    )
 
                 else:
-                    logger.warning(f"Unsupported file type, skipping: {blob_name}")
+                    logger.warning(
+                        f"[SKIP] Unsupported file type '{ext}' for blob '{blob_name}'"
+                    )
 
-            except Exception as e:
-                logger.error(f"Error processing blob '{blob_name}': {str(e)}", exc_info=True)
+            except Exception as exc:
+                logger.error(
+                    f"[SKIP] Failed to parse '{blob_name}': {exc}",
+                    exc_info=True,
+                )
+                failed.append(blob_name)
                 continue
 
-        logger.info(f"Loaded {len(documents)} documents from {len(blob_names)} blobs")
-
-        if not documents:
-            logger.warning("No documents were successfully loaded. Vector DB not created.")
-            return
-
-        # Split into chunks
-        splitter = RecursiveCharacterTextSplitter(
-            chunk_size=300,
-            chunk_overlap=50
+        blobs_loaded = len(blob_names) - len(failed)
+        logger.info(
+            f"Loaded {len(documents)} document page(s) from "
+            f"{blobs_loaded}/{len(blob_names)} blob(s)"
         )
 
+        if not documents:
+            logger.warning(
+                "No documents were successfully loaded — vector DB not created"
+            )
+            return {
+                "status": "error",
+                "blobs_found": len(blob_names),
+                "blobs_loaded": 0,
+                "chunks_created": 0,
+                "message": "All blobs failed to load. Check logs for details.",
+            }
+
+        # ── Step 3: chunk ─────────────────────────────────────
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=CHUNK_SIZE,
+            chunk_overlap=CHUNK_OVERLAP,
+        )
         chunks = splitter.split_documents(documents)
+        logger.info(f"Created {len(chunks)} chunk(s) from {len(documents)} page(s)")
 
-        logger.info(f"Created {len(chunks)} document chunks")
+        # ── Step 4: embed & persist ───────────────────────────
+        logger.info(f"Generating embeddings and persisting to ChromaDB at '{DB_PATH}'")
 
-        # Generate embeddings and store in ChromaDB
         Chroma.from_documents(
             documents=chunks,
             embedding=embedding_model,
-            persist_directory=DB_PATH
+            persist_directory=DB_PATH,
         )
 
-        logger.info(f"Vector database created successfully at {DB_PATH}")
+        logger.info(
+            f"Vector database created successfully — "
+            f"{len(chunks)} chunks at '{DB_PATH}'"
+        )
+
+        status = "success" if not failed else "partial"
+        msg = (
+            f"Vector DB built from {blobs_loaded}/{len(blob_names)} blobs, "
+            f"{len(chunks)} chunks"
+        )
+        if failed:
+            msg += f". Failed blobs: {failed}"
+
+        return {
+            "status": status,
+            "blobs_found": len(blob_names),
+            "blobs_loaded": blobs_loaded,
+            "chunks_created": len(chunks),
+            "message": msg,
+        }
 
     finally:
-        # Always clean up temporary files
+        # ── Step 5: cleanup ───────────────────────────────────
         try:
             shutil.rmtree(temp_dir)
-            logger.info(f"Cleaned up temporary files from {temp_dir}")
-        except Exception as e:
+            logger.info(f"Cleaned up temp directory: '{temp_dir}'")
+        except Exception as exc:
             logger.warning(
-                f"Failed to clean up temporary directory '{temp_dir}': {str(e)}",
-                exc_info=True
+                f"Could not remove temp directory '{temp_dir}': {exc}"
             )
 
 
-# =========================
-# SEARCH DOCUMENTS
-# =========================
+# ─────────────────────────────────────────────────────────────
+# Search
+# ─────────────────────────────────────────────────────────────
 
 def search_documents(query: str) -> List[str]:
     """
-    Perform a similarity search against the ChromaDB vector database.
+    Perform a semantic similarity search against the ChromaDB vector database.
 
     Args:
-        query (str): The search query string.
+        query: Natural language search query.
 
     Returns:
-        List[str]: List of matching document page contents (up to 3 results).
-                   Returns an empty list if an error occurs.
+        List[str]: Up to SEARCH_K matching document chunks.
+                   Returns [] on any error (never crashes the API).
 
     Raises:
-        FileNotFoundError: If the vector database has not been created yet.
+        FileNotFoundError: If the vector database has not been built yet.
     """
-    if not os.path.exists(DB_PATH):
+    logger.info(f"RAG search — query: '{query}'")
+
+    if not vector_db_exists():
+        logger.warning(
+            f"Vector database not found at '{DB_PATH}'. "
+            "Upload documents and trigger a rebuild."
+        )
         raise FileNotFoundError(
             f"Vector database not found at '{DB_PATH}'. "
-            "Please run create_vector_db() first to build the knowledge base."
+            "Please upload documents to Azure Blob Storage and rebuild the index."
         )
 
     try:
         vector_db = Chroma(
             persist_directory=DB_PATH,
-            embedding_function=embedding_model
+            embedding_function=embedding_model,
         )
 
-        results = vector_db.similarity_search(query, k=3)
+        results = vector_db.similarity_search(query, k=SEARCH_K)
+        chunks  = [doc.page_content for doc in results]
 
-        return [doc.page_content for doc in results]
+        logger.info(f"Search returned {len(chunks)} result(s) for query: '{query}'")
+        return chunks
 
     except FileNotFoundError:
         raise
 
-    except Exception as e:
-        logger.error(f"Search error for query '{query}': {str(e)}", exc_info=True)
+    except Exception as exc:
+        logger.error(
+            f"Search failed for query '{query}': {exc}",
+            exc_info=True,
+        )
         return []

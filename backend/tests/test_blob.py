@@ -237,20 +237,23 @@ class TestDeleteDocument:
 class TestConnectionStringValidation:
 
     def test_raises_value_error_when_connection_string_missing(self):
-        """_get_connection_string() raises ValueError when env var is absent."""
-        from services.blob_service import _get_connection_string
+        """validate_azure_config() raises AzureConfigError when env var is absent."""
+        from services.blob_service import validate_azure_config, AzureConfigError
 
         with patch.dict(os.environ, {}, clear=True):
-            # Remove the key if present
             os.environ.pop("AZURE_STORAGE_CONNECTION_STRING", None)
-            with pytest.raises(ValueError, match="AZURE_STORAGE_CONNECTION_STRING"):
-                _get_connection_string()
+            with pytest.raises(AzureConfigError):
+                validate_azure_config()
 
     def test_returns_connection_string_when_set(self):
-        """_get_connection_string() returns the env var value when set."""
-        from services.blob_service import _get_connection_string
+        """validate_azure_config() returns (conn_str, container) when set."""
+        from services.blob_service import validate_azure_config
 
-        with patch.dict(os.environ, {"AZURE_STORAGE_CONNECTION_STRING": "DefaultEndpoints..."}):
-            result = _get_connection_string()
+        with patch.dict(os.environ, {
+            "AZURE_STORAGE_CONNECTION_STRING": "DefaultEndpoints...",
+            "AZURE_BLOB_CONTAINER": "knowledge-base"
+        }):
+            conn_str, container = validate_azure_config()
 
-        assert result == "DefaultEndpoints..."
+        assert conn_str == "DefaultEndpoints..."
+        assert container == "knowledge-base"

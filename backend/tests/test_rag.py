@@ -23,7 +23,7 @@ class TestSearchDocuments:
 
     def test_returns_list_of_strings(self):
         """search_documents() must return a list of strings."""
-        with patch("services.rag_service.os.path.exists", return_value=True), \
+        with patch("services.rag_service.vector_db_exists", return_value=True), \
              patch("services.rag_service.Chroma") as mock_chroma:
 
             mock_chroma.return_value.similarity_search.return_value = [
@@ -39,7 +39,7 @@ class TestSearchDocuments:
 
     def test_returns_correct_page_content(self):
         """search_documents() must return the page_content of each result doc."""
-        with patch("services.rag_service.os.path.exists", return_value=True), \
+        with patch("services.rag_service.vector_db_exists", return_value=True), \
              patch("services.rag_service.Chroma") as mock_chroma:
 
             mock_chroma.return_value.similarity_search.return_value = [
@@ -53,7 +53,7 @@ class TestSearchDocuments:
 
     def test_returns_at_most_k3_results(self):
         """search_documents() must pass k=3 to similarity_search."""
-        with patch("services.rag_service.os.path.exists", return_value=True), \
+        with patch("services.rag_service.vector_db_exists", return_value=True), \
              patch("services.rag_service.Chroma") as mock_chroma:
 
             mock_chroma.return_value.similarity_search.return_value = [
@@ -70,14 +70,14 @@ class TestSearchDocuments:
 
     def test_raises_file_not_found_when_db_missing(self):
         """search_documents() raises FileNotFoundError when vector DB doesn't exist."""
-        with patch("services.rag_service.os.path.exists", return_value=False):
+        with patch("services.rag_service.vector_db_exists", return_value=False):
             from services.rag_service import search_documents
             with pytest.raises(FileNotFoundError, match="Vector database"):
                 search_documents("any query")
 
     def test_returns_empty_list_on_chroma_error(self):
         """search_documents() returns [] and does not raise on unexpected Chroma errors."""
-        with patch("services.rag_service.os.path.exists", return_value=True), \
+        with patch("services.rag_service.vector_db_exists", return_value=True), \
              patch("services.rag_service.Chroma") as mock_chroma:
 
             mock_chroma.return_value.similarity_search.side_effect = RuntimeError("index corrupt")
@@ -89,7 +89,7 @@ class TestSearchDocuments:
 
     def test_returns_empty_list_when_no_results(self):
         """search_documents() returns [] when similarity_search finds nothing."""
-        with patch("services.rag_service.os.path.exists", return_value=True), \
+        with patch("services.rag_service.vector_db_exists", return_value=True), \
              patch("services.rag_service.Chroma") as mock_chroma:
 
             mock_chroma.return_value.similarity_search.return_value = []
@@ -162,7 +162,7 @@ class TestCustomerSupportAgentRAG:
 
     def test_returns_string_response(self):
         """customer_support_agent() must always return a string."""
-        with patch("services.rag_service.os.path.exists", return_value=True), \
+        with patch("services.rag_service.vector_db_exists", return_value=True), \
              patch("services.rag_service.Chroma") as mock_chroma, \
              patch("agents.customer_support.support_agent._get_openai_client",
                    return_value=None):
@@ -179,7 +179,7 @@ class TestCustomerSupportAgentRAG:
 
     def test_fallback_when_no_openai_key(self):
         """Agent returns raw RAG chunk (not LLM answer) when OpenAI key is absent."""
-        with patch("services.rag_service.os.path.exists", return_value=True), \
+        with patch("services.rag_service.vector_db_exists", return_value=True), \
              patch("services.rag_service.Chroma") as mock_chroma, \
              patch("agents.customer_support.support_agent._get_openai_client",
                    return_value=None):
@@ -195,7 +195,7 @@ class TestCustomerSupportAgentRAG:
 
     def test_returns_not_found_message_when_no_chunks(self):
         """Agent returns a helpful message when RAG finds no relevant chunks."""
-        with patch("services.rag_service.os.path.exists", return_value=True), \
+        with patch("services.rag_service.vector_db_exists", return_value=True), \
              patch("services.rag_service.Chroma") as mock_chroma:
 
             mock_chroma.return_value.similarity_search.return_value = []
@@ -208,7 +208,7 @@ class TestCustomerSupportAgentRAG:
 
     def test_returns_unavailable_message_when_db_missing(self):
         """Agent returns a graceful error message when vector DB doesn't exist."""
-        with patch("services.rag_service.os.path.exists", return_value=False):
+        with patch("services.rag_service.vector_db_exists", return_value=False):
             from agents.customer_support.support_agent import customer_support_agent
             result = customer_support_agent("any question")
 
@@ -222,7 +222,7 @@ class TestCustomerSupportAgentRAG:
         mock_response.choices[0].message.content = "Based on our policy, returns are accepted within 30 days."
         mock_openai.chat.completions.create.return_value = mock_response
 
-        with patch("services.rag_service.os.path.exists", return_value=True), \
+        with patch("services.rag_service.vector_db_exists", return_value=True), \
              patch("services.rag_service.Chroma") as mock_chroma, \
              patch("agents.customer_support.support_agent._get_openai_client",
                    return_value=mock_openai):
