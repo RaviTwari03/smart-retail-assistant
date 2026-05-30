@@ -345,7 +345,6 @@ def get_forecast_analytics() -> Dict[str, Any]:
     """
     logger.info("Computing forecast analytics")
 
-    from services.forecast_service import predict_future_sales
     predictions = predict_future_sales(periods=7)
     values = [p["yhat"] for p in predictions]
     peak   = max(predictions, key=lambda x: x["yhat"])
@@ -482,7 +481,6 @@ def get_agent_insights() -> Dict[str, Any]:
     kb_docs = []
     blob_connected = False
     try:
-        from services.blob_service import list_documents
         doc_names = list_documents()
         blob_connected = True
         kb_docs = [
