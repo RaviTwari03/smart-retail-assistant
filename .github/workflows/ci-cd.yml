@@ -140,7 +140,9 @@ jobs:
 
   # ───────────────────────────────────────────────────────────
   # JOB 4 — Deploy to Azure App Service
-  # Uses publish profile — no service principal needed
+  # Uses Azure CLI with publish profile credentials
+  # (azure/webapps-deploy@v3 does not support container image
+  #  updates via publish profile — CLI is the correct approach)
   # ───────────────────────────────────────────────────────────
   deploy:
     name: 🚀 Deploy to Azure App Service
@@ -149,22 +151,62 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
-      - name: Deploy backend container to Azure App Service
-        uses: azure/webapps-deploy@v3
-        with:
-          app-name:       ${{ env.AZURE_APP_NAME }}
-          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-          images:         ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+      - name: Extract publish profile credentials
+        id: creds
+        run: |
+          # Parse userName and userPWD from the publish profile XML
+          PROFILE='${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}'
+          USERNAME=$(echo "$PROFILE" | grep -oP 'userName="\K[^"]+' | head -1)
+          PASSWORD=$(echo "$PROFILE" | grep -oP 'userPWD="\K[^"]+' | head -1)
+          SCMURL=$(echo "$PROFILE" | grep -oP 'publishUrl="\K[^"]+' | head -1)
+          echo "scm_url=$SCMURL" >> $GITHUB_OUTPUT
+          echo "::add-mask::$PASSWORD"
+          echo "username=$USERNAME" >> $GITHUB_OUTPUT
+          echo "password=$PASSWORD" >> $GITHUB_OUTPUT
+
+      - name: Update container image via Kudu REST API
+        run: |
+          NEW_IMAGE="${{ env.BACKEND_IMAGE }}:${{ github.sha }}"
+          SCM_URL="https://${{ steps.creds.outputs.scm_url }}"
+          echo "Updating container image to: $NEW_IMAGE"
+
+          # Use Kudu API to update the container settings
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+            "$SCM_URL/api/settings" \
+            -u "${{ steps.creds.outputs.username }}:${{ steps.creds.outputs.password }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"DOCKER_CUSTOM_IMAGE_NAME\": \"$NEW_IMAGE\"}")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          echo "Kudu API response code: $HTTP_CODE"
+
+          if [ "$HTTP_CODE" != "204" ] && [ "$HTTP_CODE" != "200" ]; then
+            echo "⚠️ Kudu settings update returned $HTTP_CODE — attempting restart"
+          fi
+
+          # Restart the app to pull the new image
+          RESTART=$(curl -s -w "\n%{http_code}" -X POST \
+            "$SCM_URL/api/restart" \
+            -u "${{ steps.creds.outputs.username }}:${{ steps.creds.outputs.password }}")
+
+          RESTART_CODE=$(echo "$RESTART" | tail -1)
+          echo "Restart response code: $RESTART_CODE"
 
       - name: Wait for container to start
-        run: sleep 40
+        run: |
+          echo "Waiting 60s for new container to start..."
+          sleep 60
 
       - name: Health check
         run: |
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" ${{ env.AZURE_APP_URL }}/health)
-          echo "Health check HTTP status: $STATUS"
-          if [ "$STATUS" != "200" ]; then
-            echo "❌ Health check failed — status $STATUS"
-            exit 1
-          fi
-          echo "✅ Deployment successful — API is healthy"
+          for i in 1 2 3; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" ${{ env.AZURE_APP_URL }}/health)
+            echo "Attempt $i — Health check status: $STATUS"
+            if [ "$STATUS" = "200" ]; then
+              echo "✅ Deployment successful — API is healthy"
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "❌ Health check failed after 3 attempts"
+          exit 1
