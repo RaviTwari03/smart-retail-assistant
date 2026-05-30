@@ -473,6 +473,102 @@ def delete_blob_document(blob_name: str):
 
 
 # =========================
+# Analytics APIs (Power BI)
+# =========================
+
+@app.get("/analytics/revenue")
+def analytics_revenue():
+    """
+    Power BI Revenue Dashboard endpoint.
+
+    Returns KPI metrics, weekly trend series, top-10 stores,
+    and monthly summary — all computed from the Walmart dataset.
+
+    Power BI connection:
+        Get Data → Web → https://<your-app>.azurewebsites.net/analytics/revenue
+    """
+    try:
+        from services.analytics_service import get_revenue_analytics
+        return get_revenue_analytics()
+
+    except Exception as e:
+        logger.error(f"Revenue analytics error: {str(e)}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": str(e)}
+        )
+
+
+@app.get("/analytics/inventory")
+def analytics_inventory():
+    """
+    Power BI Inventory Dashboard endpoint.
+
+    Returns per-store stock status, anomaly summary,
+    and economic indicator time series.
+
+    Power BI connection:
+        Get Data → Web → https://<your-app>.azurewebsites.net/analytics/inventory
+    """
+    try:
+        from services.analytics_service import get_inventory_analytics
+        return get_inventory_analytics()
+
+    except Exception as e:
+        logger.error(f"Inventory analytics error: {str(e)}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": str(e)}
+        )
+
+
+@app.get("/analytics/forecast")
+def analytics_forecast():
+    """
+    Power BI Forecast Dashboard endpoint.
+
+    Returns Prophet 7-day forecast with confidence bands,
+    trend direction, and historical vs forecast comparison series.
+
+    Power BI connection:
+        Get Data → Web → https://<your-app>.azurewebsites.net/analytics/forecast
+    """
+    try:
+        from services.analytics_service import get_forecast_analytics
+        return get_forecast_analytics()
+
+    except Exception as e:
+        logger.error(f"Forecast analytics error: {str(e)}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": str(e)}
+        )
+
+
+@app.get("/analytics/agent-insights")
+def analytics_agent_insights():
+    """
+    Power BI Agent Insights Dashboard endpoint.
+
+    Returns agent registry, chat history, knowledge base document list,
+    RAG pipeline status, and usage KPIs.
+
+    Power BI connection:
+        Get Data → Web → https://<your-app>.azurewebsites.net/analytics/agent-insights
+    """
+    try:
+        from services.analytics_service import get_agent_insights
+        return get_agent_insights()
+
+    except Exception as e:
+        logger.error(f"Agent insights error: {str(e)}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": str(e)}
+        )
+
+
+# =========================
 # Startup Entry Point
 # =========================
 

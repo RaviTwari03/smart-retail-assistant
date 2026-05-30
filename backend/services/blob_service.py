@@ -14,8 +14,13 @@ import os
 from pathlib import Path
 from typing import Dict, List
 
+from dotenv import load_dotenv
+
 from azure.core.exceptions import ResourceNotFoundError, ServiceRequestError
 from azure.storage.blob import BlobServiceClient, ContainerClient
+
+# Load .env for local development
+load_dotenv()
 
 # =========================
 # LOGGING
