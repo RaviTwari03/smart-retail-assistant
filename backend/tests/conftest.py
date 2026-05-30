@@ -58,10 +58,25 @@ def _stub_db_service():
     sys.modules["services.db_service"] = stub
 
 
+def _stub_anomaly_service():
+    """
+    Stub anomaly_service so the pickle file is never loaded at import time.
+    Individual tests that need real anomaly behaviour patch _load_model directly.
+    """
+    stub = types.ModuleType("services.anomaly_service")
+    stub._model = None
+    stub._load_model = MagicMock(return_value=MagicMock())
+    stub.detect_anomalies = MagicMock(return_value=[
+        {"sales": 50000.0, "is_anomaly": False}
+    ])
+    sys.modules["services.anomaly_service"] = stub
+
+
 # Apply stubs once at import time (before any test module imports main)
 _stub_database()
 _stub_db_models()
 _stub_db_service()
+_stub_anomaly_service()
 
 
 # ---------------------------------------------------------------------------

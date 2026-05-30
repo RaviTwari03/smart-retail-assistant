@@ -130,17 +130,20 @@ class TestAnomalyEndpoint:
 
     def test_anomaly_returns_200(self, client):
         mock_results = [{"sales": 50_000.0, "is_anomaly": False}]
-        with patch("services.anomaly_service.model") as mock_model:
-            import pandas as pd
-            mock_model.predict.return_value = [1]  # 1 = normal, -1 = anomaly
+        with patch("services.anomaly_service._load_model") as mock_load:
+            mock_model = MagicMock()
+            mock_model.predict.return_value = [1]
+            mock_load.return_value = mock_model
 
             response = client.post("/detect-anomaly", json={"sales": [50_000.0]})
 
         assert response.status_code == 200
 
     def test_anomaly_response_has_status_success(self, client):
-        with patch("services.anomaly_service.model") as mock_model:
+        with patch("services.anomaly_service._load_model") as mock_load:
+            mock_model = MagicMock()
             mock_model.predict.return_value = [1, -1]
+            mock_load.return_value = mock_model
 
             data = client.post(
                 "/detect-anomaly",
