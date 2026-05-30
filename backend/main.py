@@ -1,10 +1,23 @@
+import logging
 import os
-import uvicorn
+import tempfile
 
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+import uvicorn
+from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+
+# =========================
+# LOGGING SETUP
+# =========================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
+
+logger = logging.getLogger(__name__)
 
 # =========================
 # Database Imports
@@ -308,6 +321,154 @@ async def bot_messages(request: Request):
                 "message": str(e)
             },
             status_code=500
+        )
+
+
+# =========================
+# Blob Storage - List Documents
+# =========================
+
+@app.get("/blob-documents")
+def list_blob_documents():
+    """
+    List all documents stored in Azure Blob Storage knowledge base container.
+
+    Returns:
+        200: {"status": "success", "documents": [...]}
+        500: {"status": "error", "message": "..."}
+    """
+    try:
+        from services.blob_service import list_documents
+
+        docs = list_documents()
+
+        return {
+            "status": "success",
+            "documents": docs
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to list blob documents: {str(e)}", exc_info=True)
+
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": str(e)
+            }
+        )
+
+
+# =========================
+# Blob Storage - Upload Document
+# =========================
+
+@app.post("/upload-document")
+async def upload_document(file: UploadFile = File(...)):
+    """
+    Upload a document to Azure Blob Storage knowledge base container.
+
+    Args:
+        file: Multipart file upload (PDF or TXT)
+
+    Returns:
+        200: {"status": "success", "blob_name": "..."}
+        400: {"status": "error", "message": "..."}
+        500: {"status": "error", "message": "..."}
+    """
+    if not file or not file.filename:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "message": "No file provided. Please attach a file to the request."
+            }
+        )
+
+    try:
+        from services.blob_service import upload_document as blob_upload
+
+        # Save upload to a temp file, then push to blob storage
+        suffix = "." + file.filename.rsplit(".", 1)[-1] if "." in file.filename else ""
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            contents = await file.read()
+            tmp.write(contents)
+            tmp_path = tmp.name
+
+        try:
+            result = blob_upload(file_path=tmp_path, blob_name=file.filename)
+        finally:
+            # Always remove the temp file
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+
+        return {
+            "status": "success",
+            "blob_name": result["blob_name"]
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to upload document '{file.filename}': {str(e)}", exc_info=True)
+
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": str(e)
+            }
+        )
+
+
+# =========================
+# Blob Storage - Delete Document
+# =========================
+
+@app.delete("/delete-document/{blob_name}")
+def delete_blob_document(blob_name: str):
+    """
+    Delete a document from Azure Blob Storage knowledge base container.
+
+    Args:
+        blob_name: Name of the blob to delete (path parameter)
+
+    Returns:
+        200: {"status": "success", "message": "..."}
+        404: {"status": "error", "message": "..."}
+        500: {"status": "error", "message": "..."}
+    """
+    try:
+        from services.blob_service import delete_document, BlobNotFoundError
+
+        delete_document(blob_name)
+
+        return {
+            "status": "success",
+            "message": f"Blob '{blob_name}' deleted successfully"
+        }
+
+    except Exception as e:
+        from services.blob_service import BlobNotFoundError
+
+        if isinstance(e, BlobNotFoundError):
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "status": "error",
+                    "message": str(e)
+                }
+            )
+
+        logger.error(f"Failed to delete blob '{blob_name}': {str(e)}", exc_info=True)
+
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": str(e)
+            }
         )
 
 

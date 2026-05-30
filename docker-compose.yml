@@ -23,6 +23,17 @@ services:
     volumes:
       - ./backend:/app
 
+    environment:
+      # PostgreSQL - matches the local postgres service above
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/smart_retail_db
+
+      # Azure Blob Storage - copy from your Azure App Service env vars
+      AZURE_STORAGE_CONNECTION_STRING: ${AZURE_STORAGE_CONNECTION_STRING}
+      AZURE_BLOB_CONTAINER: ${AZURE_BLOB_CONTAINER:-knowledge-base}
+
+      # OpenAI - required for LLM synthesis in customer support agent
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+
     depends_on:
       - postgres
 
