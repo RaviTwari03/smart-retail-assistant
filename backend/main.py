@@ -1,19 +1,11 @@
-"""
-Smart Retail Assistant — FastAPI Backend
-=========================================
-All existing APIs preserved.
-New behaviour:
-  - Startup: auto-build vector DB if it doesn't exist
-  - Upload: rebuild vector DB after every successful upload
-  - Search: safe error responses when DB is missing
-"""
+
 
 import logging
 import os
 import tempfile
 
 import uvicorn
-from fastapi import FastAPI, File, Request, UploadFile
+from fastapi import FastAPI, File, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -78,44 +70,20 @@ class OrchestratorRequest(BaseModel):
 
 @app.on_event("startup")
 async def startup_event() -> None:
-    """
-    On application startup:
-      1. Log environment status (Azure vars present/missing)
-      2. If vector_db does not exist → build it from Azure Blob Storage
-      3. Never block startup — all failures are logged and swallowed
-    """
     logger.info("=" * 60)
     logger.info("Smart Retail Assistant — startup")
     logger.info("=" * 60)
 
-    # Log Azure config status (values masked)
-    conn_str   = os.getenv("AZURE_STORAGE_CONNECTION_STRING", "")
-    container  = os.getenv("AZURE_BLOB_CONTAINER", "knowledge-base")
-    logger.info(
-        f"Azure Blob Storage: "
-        f"connection_string={'SET' if conn_str else 'NOT SET'}, "
-        f"container='{container}'"
-    )
-
-    # Auto-build vector DB if missing
     try:
         from services.rag_service import vector_db_exists, create_vector_db
-
         if vector_db_exists():
             logger.info("Vector database already exists — skipping auto-build")
         else:
-            logger.info(
-                "Vector database not found — building from Azure Blob Storage..."
-            )
+            logger.info("Vector database not found — building from Azure Blob Storage...")
             result = create_vector_db()
             logger.info(f"Startup vector DB build result: {result}")
-
     except Exception as exc:
-        # Never block startup
-        logger.warning(
-            f"Startup vector DB build failed (non-fatal): {exc}",
-            exc_info=True,
-        )
+        logger.warning(f"Startup vector DB build failed (non-fatal): {exc}", exc_info=True)
 
     logger.info("Startup complete — API is ready")
 
@@ -183,29 +151,10 @@ def anomaly_detection(data: SalesData):
 
 @app.post("/search-documents")
 def search_docs(data: QueryRequest):
-    """
-    Semantic search over the knowledge base.
-
-    Returns a meaningful error if the vector DB is not ready
-    instead of crashing.
-    """
     try:
         from services.rag_service import search_documents
         results = search_documents(data.query)
         return {"status": "success", "query": data.query, "results": results}
-
-    except FileNotFoundError as exc:
-        logger.warning(f"Search attempted but vector DB missing: {exc}")
-        return JSONResponse(
-            status_code=503,
-            content={
-                "status": "error",
-                "message": (
-                    "Knowledge base is not ready. "
-                    "Upload documents and wait for the index to rebuild."
-                ),
-            },
-        )
     except Exception as exc:
         logger.error(f"Search error: {exc}", exc_info=True)
         return {"status": "error", "message": str(exc)}
@@ -251,10 +200,7 @@ def get_chat_history():
     try:
         db = SessionLocal()
         chats = db.query(ChatHistory).all()
-        result = [
-            {"id": c.id, "query": c.query, "response": c.response}
-            for c in chats
-        ]
+        result = [{"id": c.id, "query": c.query, "response": c.response} for c in chats]
         db.close()
         return {"status": "success", "history": result}
     except Exception as exc:
@@ -263,20 +209,12 @@ def get_chat_history():
 
 
 # ─────────────────────────────────────────────────────────────
-# Azure Bot
+# Azure Bot (Dummy Endpoint)
 # ─────────────────────────────────────────────────────────────
 
 @app.post("/api/messages")
 async def bot_messages(request: Request):
-    try:
-        body = await request.json()
-        user_message = body.get("text", "")
-        return {"type": "message", "text": f"Hello Ravi 👋 You said: {user_message}"}
-    except Exception as exc:
-        return JSONResponse(
-            status_code=500,
-            content={"status": "error", "message": str(exc)},
-        )
+    return {"status": "ok", "message": "Bot is currently in direct-response mode."}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -285,170 +223,48 @@ async def bot_messages(request: Request):
 
 @app.get("/blob-documents")
 def list_blob_documents():
-    """List all documents in the Azure Blob Storage knowledge-base container."""
     try:
         from services.blob_service import list_documents
-        docs = list_documents()
-        logger.info(f"Listed {len(docs)} blob document(s)")
-        return {"status": "success", "documents": docs}
+        return {"status": "success", "documents": list_documents()}
     except Exception as exc:
-        logger.error(f"list_blob_documents error: {exc}", exc_info=True)
-        return JSONResponse(
-            status_code=500,
-            content={"status": "error", "message": str(exc)},
-        )
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(exc)})
 
 
 # ─────────────────────────────────────────────────────────────
-# Blob Storage — Upload  (auto-rebuilds vector DB)
+# Blob Storage — Upload / Delete
 # ─────────────────────────────────────────────────────────────
 
 @app.post("/upload-document")
 async def upload_document(file: UploadFile = File(...)):
-    """
-    Upload a document to Azure Blob Storage, then automatically
-    rebuild the ChromaDB vector database so the document is
-    immediately searchable.
-
-    Returns:
-        200: {"status": "success", "blob_name": str, "vector_db": dict}
-        400: {"status": "error", "message": str}   — missing file
-        500: {"status": "error", "message": str}   — upload / rebuild failure
-    """
-    if not file or not file.filename:
-        return JSONResponse(
-            status_code=400,
-            content={
-                "status": "error",
-                "message": "No file provided. Attach a PDF or TXT file.",
-            },
-        )
-
-    tmp_path: str | None = None
-
+    tmp_path = None
     try:
         from services.blob_service import upload_document as blob_upload
         from services.rag_service import create_vector_db
-
-        # ── 1. Save to temp file ──────────────────────────────
-        suffix = (
-            "." + file.filename.rsplit(".", 1)[-1]
-            if "." in file.filename
-            else ""
-        )
+        suffix = ("." + file.filename.rsplit(".", 1)[-1]) if "." in file.filename else ""
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp.write(await file.read())
             tmp_path = tmp.name
-
-        # ── 2. Upload to Azure Blob Storage ───────────────────
-        logger.info(f"Uploading '{file.filename}' to Azure Blob Storage")
-        upload_result = blob_upload(file_path=tmp_path, blob_name=file.filename)
-        logger.info(f"Upload complete: {upload_result}")
-
-        # ── 3. Rebuild vector DB ──────────────────────────────
-        logger.info(
-            f"Rebuilding vector database after upload of '{file.filename}'"
-        )
+        blob_upload(file_path=tmp_path, blob_name=file.filename)
         rebuild_result = create_vector_db()
-        logger.info(f"Vector DB rebuild result: {rebuild_result}")
-
-        return {
-            "status": "success",
-            "blob_name": upload_result["blob_name"],
-            "vector_db": rebuild_result,
-        }
-
+        return {"status": "success", "blob_name": file.filename, "vector_db": rebuild_result}
     except Exception as exc:
-        logger.error(
-            f"upload_document failed for '{file.filename}': {exc}",
-            exc_info=True,
-        )
-        return JSONResponse(
-            status_code=500,
-            content={"status": "error", "message": str(exc)},
-        )
-
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(exc)})
     finally:
-        # Always clean up the temp file
-        if tmp_path:
-            try:
-                os.unlink(tmp_path)
-            except Exception:
-                pass
-
-
-# ─────────────────────────────────────────────────────────────
-# Blob Storage — Delete
-# ─────────────────────────────────────────────────────────────
+        if tmp_path: os.unlink(tmp_path)
 
 @app.delete("/delete-document/{blob_name}")
 def delete_blob_document(blob_name: str):
-    """
-    Delete a document from Azure Blob Storage.
-
-    Returns:
-        200: {"status": "success", "message": str}
-        404: {"status": "error", "message": str}   — blob not found
-        500: {"status": "error", "message": str}   — unexpected error
-    """
     try:
-        from services.blob_service import delete_document, BlobNotFoundError
+        from services.blob_service import delete_document
         delete_document(blob_name)
-        logger.info(f"Deleted blob: '{blob_name}'")
-        return {
-            "status": "success",
-            "message": f"Blob '{blob_name}' deleted successfully",
-        }
-
+        return {"status": "success", "message": "Deleted successfully"}
     except Exception as exc:
-        from services.blob_service import BlobNotFoundError
-
-        if isinstance(exc, BlobNotFoundError):
-            return JSONResponse(
-                status_code=404,
-                content={"status": "error", "message": str(exc)},
-            )
-
-        logger.error(f"delete_blob_document error for '{blob_name}': {exc}", exc_info=True)
-        return JSONResponse(
-            status_code=500,
-            content={"status": "error", "message": str(exc)},
-        )
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(exc)})
 
 
 # ─────────────────────────────────────────────────────────────
 # Analytics (Power BI)
 # ─────────────────────────────────────────────────────────────
-
-@app.get("/analytics/revenue")
-def analytics_revenue():
-    try:
-        from services.analytics_service import get_revenue_analytics
-        return get_revenue_analytics()
-    except Exception as exc:
-        logger.error(f"Revenue analytics error: {exc}", exc_info=True)
-        return JSONResponse(status_code=500, content={"status": "error", "message": str(exc)})
-
-
-@app.get("/analytics/inventory")
-def analytics_inventory():
-    try:
-        from services.analytics_service import get_inventory_analytics
-        return get_inventory_analytics()
-    except Exception as exc:
-        logger.error(f"Inventory analytics error: {exc}", exc_info=True)
-        return JSONResponse(status_code=500, content={"status": "error", "message": str(exc)})
-
-
-@app.get("/analytics/forecast")
-def analytics_forecast():
-    try:
-        from services.analytics_service import get_forecast_analytics
-        return get_forecast_analytics()
-    except Exception as exc:
-        logger.error(f"Forecast analytics error: {exc}", exc_info=True)
-        return JSONResponse(status_code=500, content={"status": "error", "message": str(exc)})
-
 
 @app.get("/analytics/agent-insights")
 def analytics_agent_insights():
@@ -463,7 +279,58 @@ def analytics_agent_insights():
 # ─────────────────────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
+# Inventory Analytics
+# ─────────────────────────────────────────────────────────────
 
+@app.get("/analytics/inventory")
+def analytics_inventory():
+    return {
+        "kpis": {
+            "total_stores": 45,
+            "critical_stock_stores": 5,
+            "warning_stock_stores": 12,
+            "stable_stock_stores": 28
+        },
+
+        "anomaly_summary": {
+            "anomaly_rate_pct": 8.5
+        },
+
+        "store_inventory_status": [
+            {
+                "store_id": 1,
+                "avg_weekly_sales": 25000,
+                "sales_volatility": 4200,
+                "stock_status": "Stable"
+            },
+            {
+                "store_id": 2,
+                "avg_weekly_sales": 18000,
+                "sales_volatility": 5100,
+                "stock_status": "Warning"
+            },
+            {
+                "store_id": 3,
+                "avg_weekly_sales": 12000,
+                "sales_volatility": 8200,
+                "stock_status": "Critical"
+            },
+            {
+                "store_id": 4,
+                "avg_weekly_sales": 30000,
+                "sales_volatility": 2500,
+                "stock_status": "Healthy"
+            },
+            {
+                "store_id": 5,
+                "avg_weekly_sales": 22000,
+                "sales_volatility": 3700,
+                "stock_status": "Stable"
+            }
+        ]
+    }
+    
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port)

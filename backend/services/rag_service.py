@@ -1,25 +1,4 @@
-"""
-RAG Service
-===========
-Retrieval-Augmented Generation pipeline for the Smart Retail Assistant.
 
-Architecture:
-    Azure Blob Storage (single source of truth)
-        ↓  list_documents()
-        ↓  download_document() → secure temp directory
-        ↓  PyPDFLoader / TextLoader
-        ↓  RecursiveCharacterTextSplitter (chunk=300, overlap=50)
-        ↓  HuggingFaceEmbeddings (all-MiniLM-L6-v2)
-        ↓  ChromaDB (persisted at ./vector_db)
-        ↓  similarity_search(k=3)
-        ↓  FastAPI response
-
-Design principles:
-    - One corrupt blob never stops the whole pipeline
-    - Temp files are always cleaned up (finally block)
-    - search_documents() never crashes the API
-    - Structured logging at every stage
-"""
 
 import logging
 import os

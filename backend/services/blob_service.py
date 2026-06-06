@@ -1,19 +1,3 @@
-"""
-Azure Blob Storage Service
-==========================
-Single source of truth for all knowledge-base document operations.
-
-Environment Variables:
-    AZURE_STORAGE_CONNECTION_STRING  - Required. Azure Storage connection string.
-    AZURE_BLOB_CONTAINER             - Optional. Container name (default: knowledge-base).
-
-Design principles:
-    - Lazy client initialisation — never crashes on import
-    - Every public function logs start, success, and failure
-    - All Azure SDK exceptions are caught and re-raised as typed exceptions
-    - Application never crashes due to Azure failures
-"""
-
 import logging
 import os
 from pathlib import Path
@@ -80,10 +64,6 @@ def validate_azure_config() -> Tuple[str, str]:
 
     return conn_str, container
 
-
-# ─────────────────────────────────────────────────────────────
-# Lazy client cache
-# ─────────────────────────────────────────────────────────────
 
 _blob_service_client: Optional[BlobServiceClient] = None
 _container_client: Optional[ContainerClient] = None

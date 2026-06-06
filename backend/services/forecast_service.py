@@ -1,19 +1,4 @@
-"""
-Forecast Service
-================
-Real Prophet-based sales forecasting for the Smart Retail Assistant.
 
-Uses the Walmart dataset to train a Prophet model and predict
-future weekly sales. Falls back to a pre-trained pickle model
-if available, otherwise trains on-the-fly.
-
-Architecture:
-    Walmart.csv (Raw data)
-        ↓ Preprocess (Date → ds, Weekly_Sales → y)
-        ↓ Prophet model.fit(df)
-        ↓ model.predict(future_dates)
-        ↓ Return 7-day forecast
-"""
 
 import logging
 import os
